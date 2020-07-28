@@ -1225,7 +1225,7 @@ if($DeleteAuthorizedApps -or $All -or $Basic)
 # End of script, ask user for restart
 
 $shell = New-Object -comobject "WScript.Shell"
-$choice = $shell.popup("Most of previous operations needs a reboot to be effective. Restart now? Use Get-Help for important notes.", 10, "Automatic restart after 10 seconds", 1+32) # type of buttons + windows
+$choice = $shell.popup("Most of previous operations needs a reboot to be effective. Restart now? Use Get-Help for important notes.", 0, "Reboot required", 1+32) # type of buttons + windows
 
 <#
 Type of buttons :
