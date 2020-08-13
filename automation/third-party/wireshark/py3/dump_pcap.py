@@ -1,9 +1,13 @@
+#!/usr/bin/env python3
+
 import argparse
 import itertools
 import os
 
-import reven2
 import network_packet_tools as nw_tools
+
+import reven2
+
 from scapy.all import Ether, TCP, wrpcap
 
 """
@@ -103,7 +107,7 @@ def dump_pcap(reven_server, output_file="output.pcap", fix_checksum=False):
             buf, size = get_network_buffer_recv_RxPacketAssemble(ctx)
 
         if buf is not None:
-            packet = Ether(str(buf))
+            packet = Ether(buf)
 
             # Here we check wether or not we have to fix checksum.
             if fix_checksum:
