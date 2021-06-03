@@ -240,15 +240,26 @@ trace_r = server_r.trace
 
 # Run Diff
 
+The following cells demonstrate various ways to compare traces:
+- Comparing the instructions of a function call, ignoring subcalls
+- Comparing the instructions that manipulate a certain piece of data, leveraging the taint.
+
+In each cell, the function `my_function_data` is responsible for retrieving the list of instruction from the trace.
+You should edit it to match your use case.
+
+Also note you can customize the output to provide additional information in the report, or hide irrelevant instructions, as seen in the second example.
+
 ## Compare function's instructions
+
+In this cell, we will fetch all instruction from the first call to a function in both traces,
+then compare them.
+
 
 ```python
 def my_function_data(server):
-    trace = server.trace
-
     # Look for start of function
     symbol = next(server.ossi.symbols("Ipv6pHandleRouterAdvertisement", binary_hint="tcpip.sys"))
-    start = next(trace.search.symbol(symbol))
+    start = next(server.trace.search.symbol(symbol))
     return function_data_stepover(start, 10000)
 
 # Fetch data
@@ -268,15 +279,28 @@ In this cell, we fetch the same function as above, but we provide a custom outpu
 
 ```python
 def my_function_data(server):
-    trace = server.trace
-
     # Look for start of function
     symbol = next(server.ossi.symbols("Ipv6pHandleRouterAdvertisement", binary_hint="tcpip.sys"))
-    start = next(trace.search.symbol(symbol))
+    start = next(server.trace.search.symbol(symbol))
     return function_data_stepover(start, 10000)
 
 
 def display_calls_only(tr, is_left):
+    """
+    Customize how individual transitions are displayed in the report. 
+    This function is passed as a callback to `diff_transitions`
+
+    Note:
+     - `is_left` indicate this is applied to the left column, and can be used
+       to, for example, customize text alignment
+     - The output of this function is not used when performing the comparison, 
+       so it will not change the results
+     - returning None will cause the transition not to be displayed (again, no 
+       impact on the comparison operation itself)
+
+    Here, we will only display calls, ignoring all other instructions, and we 
+    will display more info from certain interesting calls.    
+    """
     if tr.instruction is None or tr.instruction.mnemonic != 'call':
         # Ignore non-calls
         return None    
@@ -311,7 +335,7 @@ display(HTML(df.to_html(escape=False, index=False)))
 
 In this cell, instead of comparing the entire function, we will focus on the instructions involved with certain bytes of the input. This further reduces the output, making it easy to focus on relevant code.
 
-Since the input is much smaller than before, we can also print the context alongside the instruction, making the report easier to read.
+Since the input is much smaller than before, we can also print the context alongside the instruction by using the callback `display_instructions_context`, making the report easier to read.
 
 ```python            
 def my_function_data(server, offset, size=1):
@@ -329,6 +353,7 @@ def my_function_data(server, offset, size=1):
     tainter = reven2.preview.taint.Tainter(trace)
     taint = tainter.simple_taint(taint_input, from_context=start)
     return [acc.transition for acc in taint.accesses().all()]
+
 
 # Focus of offset 0x11 of the input buffer
 left = my_function_data(server_l, 0x11, 1)
