@@ -15,7 +15,7 @@ jupyter:
 <!-- #region -->
 # Diffing traces
 
-This notebook provides a basis to perform trace comparisons at the instruction level. It has been used to generate the results that can be seen in the [Diffing trace](https://blog.tetrane.com/) blog article.
+This notebook provides a basis to perform trace comparisons at the instruction level. It has been used to generate the results that can be seen in the [Diffing trace](https://blog.tetrane.com/2021/reverse-engineering-through-trace-diffing-several-approaches.html) blog article.
 
 ## Prerequisites
 
