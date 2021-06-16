@@ -1,0 +1,257 @@
+#!/usr/bin/env python3
+# -*- coding:utf-8 -*
+
+# Drop-in into <reven-install>/share/reven/bin/
+
+import argparse
+import json
+import logging
+import os
+import subprocess
+import re
+from pathlib import Path
+from shutil import copyfile
+
+from celery.app.log import TaskFormatter
+
+
+def get_logger(name):
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.DEBUG)
+
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.DEBUG)
+
+    formatter = TaskFormatter('[%(asctime)s][%(levelname)s] %(message)s', use_color=True)
+
+    ch.setFormatter(formatter)
+
+    logger.addHandler(ch)
+
+    return logger
+
+
+def get_kernel_description_binary_list(os, archi):
+    # Add binaries required to re-generate the kernel description (usefull after import/export)
+    if os == "Windows":
+        output = subprocess.run([
+            'reven_windows_kernel_description_dependencies',
+            '--os', '%s-%s' % (os, archi),
+        ], stdout=subprocess.PIPE, check=True).stdout.decode("utf-8")
+
+        binaries = json.loads(output)
+        return binaries['required'] + binaries['optional']
+    return []
+
+
+def get_executed_binary_list(trace_dir):
+    output = subprocess.run([
+        "reven_ossi_range_query",
+        "--binaries",
+        "--trace",
+        str(trace_dir)
+    ], stdout=subprocess.PIPE, check=True).stdout.decode("utf-8")
+
+    return list(filter(
+        lambda line: len(line) > 0 and line != "<unknown>",
+        map(
+            lambda line: line.strip(),
+            output.splitlines()[1:]
+        )
+    ))
+
+
+# Find the real path of the binary (handling case insensitive path)
+def find_binary_path(parts, filesystem, path=None):
+    if path is None:
+        path = Path(".")
+
+    for name in os.listdir(str(filesystem / path)):
+        if name.lower() == parts[0].lower():
+            path /= name
+            if len(parts) == 1:
+                return path
+            else:
+                return find_binary_path(parts[1:], filesystem, path)
+
+    return None
+
+
+def get_approximate_symbols_count_linux(binary_path):
+    symbols_count = 0
+
+    try:
+        output = subprocess.run([
+            'objdump', '-t', str(binary_path),
+        ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True).stdout.decode("utf-8", 'ignore')
+        symbols_count += len(output.split('\n'))
+
+    except subprocess.CalledProcessError:
+        pass
+
+    try:
+        output = subprocess.run([
+            'objdump', '-T', str(binary_path),
+        ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True).stdout.decode("utf-8", 'ignore')
+        symbols_count += len(output.split('\n'))
+
+    except subprocess.CalledProcessError:
+        pass
+
+    return symbols_count
+
+
+# Find, extract and return the path to the debug file associated with the binary
+# See https://sourceware.org/gdb/current/onlinedocs/gdb/Separate-Debug-Files.html for what this is doing
+def extract_binary_linux_debug_file_from_fs(output_dir, binary_path, filesystem):
+    output = subprocess.run([
+        'readelf', '-n', str(filesystem / binary_path),
+    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True).stdout.decode("utf-8", 'ignore')
+
+    build_id = None
+    build_id_line_re = re.compile(r'\s*build id:\s*([a-z0-9]+)', re.IGNORECASE)
+    for line in output.split('\n'):
+        m = build_id_line_re.match(line)
+        if m is not None:
+            build_id = m.group(1)
+            break
+
+    output = subprocess.run([
+        'readelf', '-p.gnu_debuglink', str(filesystem / binary_path),
+    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True).stdout.decode("utf-8", 'ignore')
+
+    debug_link = None
+    debug_link_line_re = re.compile(r'\s*\[\s*0\s*\]\s*(.+)', re.IGNORECASE)
+    for line in output.split('\n'):
+        m = debug_link_line_re.match(line)
+        if m is not None:
+            debug_link = m.group(1)
+            break
+
+    debug_files_path = [
+        Path("usr/lib/debug/.build-id") / Path(build_id[0:2]) / Path("%s.debug" % build_id[2:]) if build_id is not None else None,
+        Path(binary_path.parent) / Path(debug_link) if debug_link is not None else None,
+        Path(binary_path.parent) / Path(".debug") / Path(debug_link) if debug_link is not None else None,
+        Path("usr/lib/debug") / Path(binary_path.parent) / Path(debug_link) if debug_link is not None else None,
+    ]
+
+    debug_files_path = list(filter(
+        lambda path: path is not None,
+        map(
+            lambda path: find_binary_path(path.parts, filesystem) if path is not None else None,
+            debug_files_path,
+        )
+    ))
+
+    for debug_file_path in debug_files_path:
+        src_path = filesystem / debug_file_path
+        dst_path = output_dir / debug_file_path
+        dst_path.parent.mkdir(parents=True, exist_ok=True)
+
+        copyfile(str(src_path), str(dst_path), follow_symlinks=True)
+
+    original_symbols_count = get_approximate_symbols_count_linux(filesystem / binary_path)
+    debug_files_path = list(filter(
+        lambda path: get_approximate_symbols_count_linux(filesystem / path) >= original_symbols_count,
+        debug_files_path,
+    ))
+
+    return output_dir / debug_files_path[0] if len(debug_files_path) > 0 else None
+
+
+def extract_binary_from_fs(os, output_dir, binary, filesystem, case_insensitive):
+    if case_insensitive:
+        binary_path = find_binary_path(Path(binary).parts, filesystem)
+
+        if binary_path is None:
+            return False
+
+        src_path = filesystem / binary_path
+    else:
+        if binary.startswith("/"):
+            binary_path = Path(binary[1:])
+        else:
+            binary_path = Path(binary)
+
+        src_path = filesystem / binary_path
+
+        if not src_path.exists():
+            return False
+
+    debug_file = None if os != "Linux" else extract_binary_linux_debug_file_from_fs(output_dir, binary_path, filesystem)
+
+    dst_path = output_dir / binary_path
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if debug_file is None:
+        copyfile(str(src_path), str(dst_path), follow_symlinks=True)
+
+    else:
+        # Copy it to a temporary file and copy the debug file instead
+        # FIXME: When the backend can read debug files we won't need to do that
+        copyfile(str(src_path), "%s.original_binary" % str(dst_path), follow_symlinks=True)
+        copyfile(str(debug_file), str(dst_path), follow_symlinks=True)
+
+    return True
+
+
+def extract_binary(os, output_dir, binary, filesystems, case_insensitive):
+    for filesystem in filesystems:
+        if extract_binary_from_fs(os, output_dir, binary, filesystem, case_insensitive):
+            return True
+
+    return False
+
+
+logger = get_logger(__name__)
+
+if __name__ == "__main__":
+    # Parse arguments
+    parser = argparse.ArgumentParser(description='Extract light FS')
+
+    parser.add_argument('--output', required=True, help='The output directory (should exists)')
+    parser.add_argument('--filesystem', required=True, action='append',
+                        help='Input filesystem(s), prioritized by the given order')
+    parser.add_argument('--os', required=True,
+                        help='OS of the VM used to record the scenario.')
+    parser.add_argument('--archi', required=True,
+                        help='Architecture of the VM used to record the scenario.')
+    parser.add_argument('--trace', required=True, help='Directory containing the trace')
+    parser.add_argument('--case-insensitive', action='store_true', help='Use case insensitive filesystem')
+
+    args = parser.parse_args()
+
+    output_dir = Path(args.output)
+
+    if not output_dir.is_dir():
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    filesystems = []
+
+    for filesystem in args.filesystem:
+        filesystem = Path(filesystem)
+
+        if not filesystem.is_dir():
+            print("The filesystem directory '%s' isn't an existing directory" % filesystem)
+            exit(1)
+
+        filesystems.append(filesystem)
+
+    trace_dir = Path(args.trace)
+
+    if not trace_dir.is_dir():
+        print("The trace directory should be an existing directory")
+        exit(1)
+
+    binaries = get_executed_binary_list(trace_dir)
+    binaries += get_kernel_description_binary_list(args.os, args.archi)
+
+    for binary in binaries:
+        try:
+            if extract_binary(args.os, output_dir, binary, filesystems, args.case_insensitive):
+                logger.info('SUCCESS: %s' % binary)
+            else:
+                logger.warning('FAILURE: %s' % binary)
+        except Exception as e:
+            logger.exception(e)
+            logger.warning('FAILURE: %s' % binary)
