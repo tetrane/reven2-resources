@@ -9,7 +9,7 @@ Useful links
 Quick start documentation: https://github.com/volatilityfoundation/volatility/wiki.
 Windows core commands: https://github.com/volatilityfoundation/volatility/wiki/Command-Reference.
 
-Why using Volatility upon Reven2
+Why using Volatility with Reven2
 --------------------------------
 
 With Reven2, we have a very quick access to the physical memory at any moment in the trace.
@@ -28,14 +28,16 @@ Installation
 Volatility
 ----------
 
+Due to upstream incompatibility of Volatility2 with Python 3, we are using a fork that adds the support for Python 3.6+.
+
 The basic steps to install Volatility are the following:
 ```
 # Download Volatility from github
-git clone https://github.com/volatilityfoundation/volatility.git
+git clone https://github.com/koromodako/volatility.git
 
-# Checkout to a supported release tag
+# Checkout to a supported commit
 cd volatility
-git checkout 2.6.1
+git checkout ef5c742d01c63ea7cffe9fb14a6647b93b88db10
 ```
 Some commands may have dependencies, you can find more information about the required dependencies on the Volatility installation page:
 https://github.com/volatilityfoundation/volatility/wiki/Installation
@@ -70,4 +72,19 @@ Example
 
 ```
 python <volatility dir>/vol.py -l localhost:13370:1000000 --profile Win10x64_10586 pslist
+```
+
+Known issues
+============
+
+- Most recent profiles of Windows 10 may not work with the current REVEN plugin.
+  In particular, profile `Win10x64_19041` reports:
+
+```py
+Volatility Foundation Volatility Framework 3.0.0
+Traceback (most recent call last):
+  File "/home/tetrane/Reven2/volatility/volatility/volatility/plugins/addrspaces/paged.py", line 115, in load_dtb
+    dtb = self.base.dtb
+AttributeError: 'Reven2AddressSpace' object has no attribute 'dtb'
+...
 ```
