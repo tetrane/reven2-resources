@@ -104,7 +104,7 @@ def taint_pcap(reven_server, recv_only=False, user_symbols=[]):
             mem_range if is_forward else ["{}".format(mem) for mem in mem_range]))
 
         last_symbol = None
-        for change in taint.changes().all():
+        for change in taint.accesses(changes_only=True).all():
             loc = change.transition.context_before().ossi.location()
             if loc is None:
                 continue
